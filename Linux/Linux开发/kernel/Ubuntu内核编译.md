@@ -57,6 +57,24 @@
 
 
 
+编译和安装步骤如下
+
+*a. make menuconfig*
+
+*b. make*
+
+*c. make modules*
+
+*d. make modules_install*
+
+*e. make install*
+
+*f. make headers_install*
+
+注意步**骤d和e**不能颠倒，否则生成的initrd.img不能正常启动，因为它依赖于**步骤c**生成的驱动程序.ko文件。
+
+
+
 ### 进入编译选项
 
 
@@ -74,6 +92,80 @@ make menuconfig
 
 
 ![image-20200901125732043](https://raw.githubusercontent.com/supermanc88/ImageSources/master/image-20200901125732043.png)
+
+
+
+#### 错误
+
+
+
+error1:
+
+```sh
+*** Unable to find the ncurses libraries or the
+*** required header files.
+*** 'make menuconfig' requires the ncurses libraries.
+*** Install ncurses (ncurses-devel) and try again.
+```
+
+> sudo apt-get install ncurses-dev
+
+
+
+error2:
+
+```sh
+/bin/sh: 1: flex: not found
+scripts/Makefile.lib:194: recipe for target 'scripts/kconfig/lexer.lex.c' failed
+make[1]: *** [scripts/kconfig/lexer.lex.c] Error 127
+Makefile:552: recipe for target 'menuconfig' failed
+make: *** [menuconfig] Error 2
+```
+
+> sudo apt-get install flex
+
+
+
+error3:
+
+```sh
+  LEX     scripts/kconfig/lexer.lex.c
+  YACC    scripts/kconfig/parser.tab.h
+/bin/sh: 1: bison: not found
+scripts/Makefile.lib:208: recipe for target 'scripts/kconfig/parser.tab.h' failed
+make[1]: *** [scripts/kconfig/parser.tab.h] Error 127
+Makefile:552: recipe for target 'menuconfig' failed
+make: *** [menuconfig] Error 2
+```
+
+> sudo apt-get install bison
+
+
+
+error4:
+
+```sh
+scripts/sign-file.c:25:10: fatal error: openssl/opensslv.h: 没有那个文件或目录
+ #include <openssl/opensslv.h>
+          ^~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+scripts/Makefile.host:92: recipe for target 'scripts/sign-file' failed
+make[1]: *** [scripts/sign-file] Error 1
+Makefile:1065: recipe for target 'scripts' failed
+make: *** [scripts] Error 2
+```
+
+> sudo apt-get install libssl-dev
+
+
+
+error5:
+
+```sh
+warning: Cannot use CONFIG_STACK_VALIDATION=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel
+```
+
+> apt-get install libelf-dev
 
 
 
@@ -154,3 +246,20 @@ make install
 如果要修改在开机时进入引导选择，修改`/etc/default/grub`文件：
 
 ![image-20200901132042392](https://raw.githubusercontent.com/supermanc88/ImageSources/master/image-20200901131720707.png)
+
+
+
+
+
+## 调试
+
+![image-20200901165952193](https://raw.githubusercontent.com/supermanc88/ImageSources/master/image-20200901165952193.png)
+
+
+
+出现这个的原因是：随机化基址
+
+可以在`/boot/grub/grub.cfg`启动参数后加`rodata=off nokaslr`
+
+
+
