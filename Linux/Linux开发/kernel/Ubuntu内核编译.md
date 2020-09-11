@@ -173,6 +173,20 @@ warning: Cannot use CONFIG_STACK_VALIDATION=y, please install libelf-dev, libelf
 
 
 
+#### 编译优化
+
+```c
+void __attribute__((optimize("O0"))) foo(unsigned char data) {
+    // unmodifiable compiler code
+}
+```
+
+虽然内核编译的时候，不能使用`-O0`方式去代码优化，但可以把单独的几个函数去优化，只要给函数加上`__attribute__((optimize("O0")))`属性即可。
+
+
+
+#### 开始编译
+
 ```sh
 make
 ```
@@ -260,6 +274,43 @@ make install
 出现这个的原因是：随机化基址
 
 可以在`/boot/grub/grub.cfg`启动参数后加`rodata=off nokaslr`
+
+
+
+有的在输入
+
+```c
+echo g > /proc/sysrq-trigger
+```
+
+中断不生效，这是因为sysrq在ubuntu系统未开启：
+
+```c
+echo 1 > /proc/sys/kernel/sysrq
+```
+
+使用上面命令开启
+
+
+
+在调试的过程中，时间长了程序会自动中止，加上以下命令：
+
+```sh
+echo 0 > /proc/sys/kernel/hung_task_timeout_secs
+```
+
+
+
+
+
+### gdb调试命令
+
+```sh
+set serial baud 115200
+
+target remote /dev/ttyS0
+```
+
 
 
 

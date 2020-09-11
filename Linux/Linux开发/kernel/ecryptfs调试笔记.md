@@ -615,11 +615,100 @@ s->s_op = &ecryptfs_sops;
 
 
 
+### ecryptfs_release
+
+```c
+ static int ecryptfs_release(struct inode *inode, struct file *file)
+ {
+ 	ecryptfs_put_lower_file(inode);
+ 	kmem_cache_free(ecryptfs_file_info_cache,
+ 			ecryptfs_file_to_private(file));
+ 	return 0;
+ }
+```
 
 
 
 
-## 节点操作
+
+### ecryptfs_dir_open
+
+```c
+ static int ecryptfs_dir_open(struct inode *inode, struct file *file)
+ {
+ 	struct dentry *ecryptfs_dentry = file->f_path.dentry;
+ 	/* Private value of ecryptfs_dentry allocated in
+ 	 * ecryptfs_lookup() */
+ 	struct ecryptfs_file_info *file_info;
+ 	struct file *lower_file;
+ 
+ 	/* Released in ecryptfs_release or end of function if failure */
+ 	file_info = kmem_cache_zalloc(ecryptfs_file_info_cache, GFP_KERNEL);
+ 	ecryptfs_set_file_private(file, file_info);
+ 	if (unlikely(!file_info)) {
+ 		ecryptfs_printk(KERN_ERR,
+ 				"Error attempting to allocate memory\n");
+ 		return -ENOMEM;
+ 	}
+ 	lower_file = dentry_open(ecryptfs_dentry_to_lower_path(ecryptfs_dentry),
+ 				 file->f_flags, current_cred());
+ 	if (IS_ERR(lower_file)) {
+ 		printk(KERN_ERR "%s: Error attempting to initialize "
+ 			"the lower file for the dentry with name "
+ 			"[%pd]; rc = [%ld]\n", __func__,
+ 			ecryptfs_dentry, PTR_ERR(lower_file));
+ 		kmem_cache_free(ecryptfs_file_info_cache, file_info);
+ 		return PTR_ERR(lower_file);
+ 	}
+ 	ecryptfs_set_file_lower(file, lower_file);
+ 	return 0;
+ }
+```
+
+
+
+核心就是`dentry_open`函数打开底层的目录项
+
+
+
+### ecryptfs_fasync
+
+```c
+ static int ecryptfs_fasync(int fd, struct file *file, int flag)
+ {
+ 	int rc = 0;
+ 	struct file *lower_file = NULL;
+ 
+ 	lower_file = ecryptfs_file_to_lower(file);
+ 	if (lower_file->f_op->fasync)
+ 		rc = lower_file->f_op->fasync(fd, lower_file, flag);
+ 	return rc;
+ }
+```
+
+该函数用于打或关闭异步I/O的通告信号
+
+### ecryptfs_fsync
+
+```c
+ static int
+ ecryptfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
+ {
+ 	int rc;
+ 
+ 	rc = file_write_and_wait(file);
+ 	if (rc)
+ 		return rc;
+ 
+ 	return vfs_fsync(ecryptfs_file_to_lower(file), datasync);
+ }
+```
+
+将给定文件的所有被缓存的数据写回磁盘。由系统调用。
+
+
+
+## 超级块操作
 
 
 
@@ -687,9 +776,197 @@ s->s_op = &ecryptfs_sops;
 
 
 
+## 节点操作
+
+
+
+```c
+ const struct inode_operations ecryptfs_symlink_iops = {
+ 	.get_link = ecryptfs_get_link,
+ 	.permission = ecryptfs_permission,
+ 	.setattr = ecryptfs_setattr,
+ 	.getattr = ecryptfs_getattr_link,
+ 	.listxattr = ecryptfs_listxattr,
+ };
+ 
+ const struct inode_operations ecryptfs_dir_iops = {
+ 	.create = ecryptfs_create,
+ 	.lookup = ecryptfs_lookup,
+ 	.link = ecryptfs_link,
+ 	.unlink = ecryptfs_unlink,
+ 	.symlink = ecryptfs_symlink,
+ 	.mkdir = ecryptfs_mkdir,
+ 	.rmdir = ecryptfs_rmdir,
+ 	.mknod = ecryptfs_mknod,
+ 	.rename = ecryptfs_rename,
+ 	.permission = ecryptfs_permission,
+ 	.setattr = ecryptfs_setattr,
+ 	.listxattr = ecryptfs_listxattr,
+ };
+ 
+ const struct inode_operations ecryptfs_main_iops = {
+ 	.permission = ecryptfs_permission,
+ 	.setattr = ecryptfs_setattr,
+ 	.getattr = ecryptfs_getattr,
+ 	.listxattr = ecryptfs_listxattr,
+ };
+```
+
+
+
+### ecryptfs_create
+
+```c
+ static int
+ ecryptfs_create(struct inode *directory_inode, struct dentry *ecryptfs_dentry,
+ 		umode_t mode, bool excl)
+ {
+ 	struct inode *ecryptfs_inode;
+ 	int rc;
+ 
+ 	ecryptfs_inode = ecryptfs_do_create(directory_inode, ecryptfs_dentry,
+ 					    mode);
+ 	if (IS_ERR(ecryptfs_inode)) {
+ 		ecryptfs_printk(KERN_WARNING, "Failed to create file in"
+ 				"lower filesystem\n");
+ 		rc = PTR_ERR(ecryptfs_inode);
+ 		goto out;
+ 	}
+ 	/* At this point, a file exists on "disk"; we need to make sure
+ 	 * that this on disk file is prepared to be an ecryptfs file */
+ 	rc = ecryptfs_initialize_file(ecryptfs_dentry, ecryptfs_inode);
+ 	if (rc) {
+ 		ecryptfs_do_unlink(directory_inode, ecryptfs_dentry,
+ 				   ecryptfs_inode);
+ 		iget_failed(ecryptfs_inode);
+ 		goto out;
+ 	}
+ 	d_instantiate_new(ecryptfs_dentry, ecryptfs_inode);
+ out:
+ 	return rc;
+ }
+```
+
+VFS通过系统调用`create`和`open`来调用该函数，从而为dentry对象创建一个新的索引节点。在创建时使用mode指定的初始模式。
+
+
+
+为什么超级块上已经有alloc_inode的功能了，inode操作函数还要有创建inode的函数：
+
+其实在内部调用了：
+
+```c
+	inode = iget5_locked(sb, (unsigned long)lower_inode,
+			     ecryptfs_inode_test, ecryptfs_inode_set,
+```
 
 
 
 
 
+此函数在内部调用了`vfs_create`调用底层文件系统进行创建inode。之后进行初始化。`ecryptfs_initialize_file`函数内部对inode进行加密状态的初始化，密钥，ctx等初始化操作后，用` ecryptfs_write_metadata`函数对节点或目录项写入元数据。
 
+
+
+最后创建一个新的缓存。
+
+
+
+### ecryptfs_setattr
+
+```c
+static int ecryptfs_setattr(struct dentry *dentry, struct iattr *ia)
+{
+	int rc = 0;
+	struct dentry *lower_dentry;
+	struct iattr lower_ia;
+	struct inode *inode;
+	struct inode *lower_inode;
+	struct ecryptfs_crypt_stat *crypt_stat;
+
+    // 先判断当前节点的加密状态，如果没有进行初始化，需要先初始化状态
+	crypt_stat = &ecryptfs_inode_to_private(d_inode(dentry))->crypt_stat;
+	if (!(crypt_stat->flags & ECRYPTFS_STRUCT_INITIALIZED)) {
+		rc = ecryptfs_init_crypt_stat(crypt_stat);
+		if (rc)
+			return rc;
+	}
+	inode = d_inode(dentry);
+	lower_inode = ecryptfs_inode_to_lower(inode);
+	lower_dentry = ecryptfs_dentry_to_lower(dentry);
+	mutex_lock(&crypt_stat->cs_mutex);
+    // 如果是文件夹，则把加密状态取消
+	if (d_is_dir(dentry))
+		crypt_stat->flags &= ~(ECRYPTFS_ENCRYPTED);
+    // 如果是通常的文件
+	else if (d_is_reg(dentry)
+		 && (!(crypt_stat->flags & ECRYPTFS_POLICY_APPLIED)
+		     || !(crypt_stat->flags & ECRYPTFS_KEY_VALID))) {
+		struct ecryptfs_mount_crypt_stat *mount_crypt_stat;
+
+        // 取出超级块的加密信息来
+		mount_crypt_stat = &ecryptfs_superblock_to_private(
+			dentry->d_sb)->mount_crypt_stat;
+		rc = ecryptfs_get_lower_file(dentry, inode);
+		if (rc) {
+			mutex_unlock(&crypt_stat->cs_mutex);
+			goto out;
+		}
+		rc = ecryptfs_read_metadata(dentry);
+		ecryptfs_put_lower_file(inode);
+		if (rc) {
+			if (!(mount_crypt_stat->flags
+			      & ECRYPTFS_PLAINTEXT_PASSTHROUGH_ENABLED)) {
+				rc = -EIO;
+				printk(KERN_WARNING "Either the lower file "
+				       "is not in a valid eCryptfs format, "
+				       "or the key could not be retrieved. "
+				       "Plaintext passthrough mode is not "
+				       "enabled; returning -EIO\n");
+				mutex_unlock(&crypt_stat->cs_mutex);
+				goto out;
+			}
+			rc = 0;
+			crypt_stat->flags &= ~(ECRYPTFS_I_SIZE_INITIALIZED
+					       | ECRYPTFS_ENCRYPTED);
+		}
+	}
+	mutex_unlock(&crypt_stat->cs_mutex);
+
+	rc = setattr_prepare(dentry, ia);
+	if (rc)
+		goto out;
+	if (ia->ia_valid & ATTR_SIZE) {
+		rc = ecryptfs_inode_newsize_ok(inode, ia->ia_size);
+		if (rc)
+			goto out;
+	}
+
+	memcpy(&lower_ia, ia, sizeof(lower_ia));
+	if (ia->ia_valid & ATTR_FILE)
+		lower_ia.ia_file = ecryptfs_file_to_lower(ia->ia_file);
+	if (ia->ia_valid & ATTR_SIZE) {
+		rc = truncate_upper(dentry, ia, &lower_ia);
+		if (rc < 0)
+			goto out;
+	}
+
+	/*
+	 * mode change is for clearing setuid/setgid bits. Allow lower fs
+	 * to interpret this in its own way.
+	 */
+	if (lower_ia.ia_valid & (ATTR_KILL_SUID | ATTR_KILL_SGID))
+		lower_ia.ia_valid &= ~ATTR_MODE;
+
+	inode_lock(d_inode(lower_dentry));
+	rc = notify_change(lower_dentry, &lower_ia, NULL);
+	inode_unlock(d_inode(lower_dentry));
+out:
+	fsstack_copy_attr_all(inode, lower_inode);
+	return rc;
+}
+```
+
+
+
+修改更新一个节点的元数据，底层节点也修改。
