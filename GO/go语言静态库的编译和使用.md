@@ -209,9 +209,11 @@ $cp say.go $GOROOT/src/pkg/say/
 
 然后就可以在自己的代码中像使用官方标准库一样使用第三方闭源包了.
 
+<font color='red'>注：这个第三方的路径要和编译时的包路径一致</font>
+
 如果三方包保留了接口与API注释, 还可以直接使用godoc命令查看
 
-```
+```go
 $godoc say
 PACKAGE DOCUMENTATION
 
@@ -227,5 +229,24 @@ func Hi()
 
 func Hello(me string)
     Say hello to someone
+```
+
+
+
+## Makefile 示例
+
+```makefile
+# 在这里添加所有的gofile
+gofiles = main.go file2.go
+
+# 这里是生成的二进制文件名
+target_name = "main"
+
+# 这里是pkg/platform路径
+pkg_path = "/root/go/pkg/linux_amd64"
+
+target :
+	go tool compile -o temp.o -I ${pkg_path} ${gofiles}
+	go tool link -o ${target_name} -L ${pkg_path} temp.o	
 ```
 
